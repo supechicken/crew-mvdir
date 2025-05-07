@@ -30,6 +30,35 @@
 
 struct mvdir_opts *opts;
 
+bool is_directory(const char *path) {
+  struct stat file_info;
+
+  // get path information
+  if (lstat(path, &file_info) == -1) {
+    fprintf(stderr, "%s: lstat() failed: %s\n", path, strerror(errno));
+    exit(errno);
+  };
+
+  return S_ISDIR(file_info.st_mode);
+}
+
+void remove_path(const char *path, bool verbose) {
+  // remove_path(): wrapper for remove()/rmdir(), depends on the path type
+  if (verbose) fprintf(stderr, "Trying to delete %s from filesystem\n", path);
+
+  if (is_directory(path)) {
+    // for directory
+    if (rmdir(path) == -1) {
+      fprintf(stderr, "%s: failed to remove directory: %s\n", path, strerror(errno));
+      exit(errno);
+    }
+  } else if (remove(path) == -1) {
+    // for regular file/block/socket/fifo
+    fprintf(stderr, "%s: failed to remove file: %s\n", path, strerror(errno));
+    exit(errno);
+  }
+}
+
 void copy_and_delete_file(const struct stat *src_info, const char *src_path, const char *dst_path) {
   // copy_and_delete_file(): copy a file and delete it after copying, used as a fallback when rename() does not work
   //                         (i.e source and destination are not in the same filesystem)
@@ -73,13 +102,14 @@ int move_file(const char *src_path, const struct stat *src_info, int flag, struc
     case FTW_F:
     case FTW_SL:
     case FTW_SLN:
-      if (access(dst_path, F_OK) == 0) {
+      if (faccessat(AT_FDCWD, dst_path, F_OK, AT_SYMLINK_NOFOLLOW) == 0) {
         // do not touch existing files if -n specified
-        if (!(opts->no_clobber || remove(dst_path) == 0)) {
-          // remove file with same name in dest (if exist)
-          fprintf(stderr, "%s: failed to remove file: %s\n", dst_path, strerror(errno));
-          exit(errno);
+        if (opts->no_clobber) {
+          if (opts->verbose) fprintf(stderr, "%s: will not replace %s as -n flag is specified\n", dst_path);
+          return 0;
         }
+
+        remove_path(dst_path, opts->verbose);
       }
 
       // move (rename) file to dest
@@ -106,8 +136,7 @@ int move_file(const char *src_path, const struct stat *src_info, int flag, struc
           // symlink: create an identical symlink and delete the source (mode will be transferred)
           char target[PATH_MAX];
 
-          ssize_t target_len = readlink(src_path, target, PATH_MAX - 1);
-          target[target_len] = 0;
+          target[readlink(src_path, target, PATH_MAX - 1)] = 0;
 
           if (symlink(target, dst_path) == -1) {
             fprintf(stderr, "%s: symlink() failed: %s\n", dst_path, strerror(errno));
@@ -124,15 +153,23 @@ int move_file(const char *src_path, const struct stat *src_info, int flag, struc
 
       break;
     case FTW_D:
+    case FTW_DNR:
+    case FTW_DP:
       // directory: create an identical directory in destination if not exist (mode will be transferred)
-      if (access(dst_path, F_OK) == -1) {
-        mode_t dir_mode = src_info->st_mode;
-
-        if (opts->verbose) fprintf(stderr, "Creating directory %s\n", dst_path);
-        if (mkdir(dst_path, dir_mode) == -1) {
-          fprintf(stderr, "%s: mkdir() failed: %s\n", src_path, strerror(errno));
-          exit(errno);
+      if (faccessat(AT_FDCWD, dst_path, F_OK, AT_SYMLINK_NOFOLLOW) == 0) {
+        // do not touch existing files if -n specified
+        if (opts->no_clobber || is_directory(dst_path)) {
+          if (opts->no_clobber && opts->verbose) fprintf(stderr, "%s: will not replace %s as -n flag is specified\n", dst_path);
+          return 0;
         }
+
+        remove_path(dst_path, opts->verbose);
+      }
+
+      if (opts->verbose) fprintf(stderr, "Creating directory %s\n", dst_path);
+      if (mkdir(dst_path, src_info->st_mode) == -1) {
+        fprintf(stderr, "%s: mkdir() failed: %s\n", src_path, strerror(errno));
+        exit(errno);
       }
 
       break;

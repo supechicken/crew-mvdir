@@ -4,10 +4,10 @@ mkdir -p builddir
 cd builddir
 
 # build shared library
-cc -shared -fPIC ${CFLAGS} ../src/mvdir.c -o crew-mvdir.so.1
+cc -shared -fPIC ${1:-CFLAGS} ../src/mvdir.c -o crew-mvdir.so
 
 # build CLI for use in install.sh
-cc ${CFLAGS} -L . -l:crew-mvdir.so.1 ../src/main.c -o crew-mvdir
+cc ${1:-CFLAGS} -L . -l:crew-mvdir.so ../src/main.c -o crew-mvdir
 
 # build ruby binding for use in crew
 ruby ../src/ruby_binding/extconf.rb
